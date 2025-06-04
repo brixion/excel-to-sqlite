@@ -1,6 +1,6 @@
 <?php
 
-namespace Brixion\ExcelToSQLite;
+namespace Brixion\ExcelToSqlite;
 
 use OpenSpout\Reader\XLSX\Options;
 use OpenSpout\Reader\XLSX\Reader;
