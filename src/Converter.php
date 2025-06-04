@@ -10,13 +10,13 @@ class Converter
     private $inputFile;
     private $db;
 
-    public function __construct($inputFile, $outputPath)
+    public function __construct(string $inputFile, string $outputPath)
     {
         $this->inputFile = $inputFile;
         $this->db = new \SQLite3($outputPath . '/' . pathinfo($inputFile, PATHINFO_FILENAME) . '.sqlite');
     }
 
-    public function convert()
+    public function convert(): void
     {
         $options = new Options();
         $options->SHOULD_PRESERVE_EMPTY_ROWS = true;
@@ -32,7 +32,7 @@ class Converter
                     $placeholders = implode(", ", array_fill(0, count($values), '?'));
                     $stmt = $this->db->prepare("INSERT INTO " . $sheet->getName() . " VALUES (NULL, " . $placeholders . ")");
                     foreach ($values as $index => $value) {
-                        $stmt->bindValue($index + 1, $value);
+                        $stmt->bindValue($index + 1, $this->convertToString($value), SQLITE3_TEXT);
                     }
                     $stmt->execute();
                 }
@@ -40,5 +40,29 @@ class Converter
         }
 
         $reader->close();
+    }
+
+    /**
+     * Converts a value to a string, handling null and empty values.
+     *
+     * @param mixed $value the value to convert
+     *
+     * @return string|null the converted value or null if the value is empty
+     */
+    private function convertToString(mixed $value): ?string
+    {
+        if (null === $value || '' === $value || [] === $value) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeImmutable || $value instanceof \DateTime) {
+            return $value->format('Y-m-d H:i:s');
+        }
+
+        if (\is_array($value)) {
+            $value = implode(' ', $value);
+        }
+
+        return (string) $value;
     }
 }
