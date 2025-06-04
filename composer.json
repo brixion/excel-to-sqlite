@@ -1,0 +1,12 @@
+{
+    "name": "brixion/excel-to-sqlite",
+    "type": "library",
+    "autoload": {
+        "psr-4": {
+            "Brixion\\ExcelToSqlite\\": "src/"
+        }
+    },
+    "require": {
+        "openspout/openspout": "^4.30"
+    }
+}
