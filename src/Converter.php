@@ -5,18 +5,19 @@ namespace Brixion\ExcelToSQLite;
 use OpenSpout\Reader\XLSX\Options;
 use OpenSpout\Reader\XLSX\Reader;
 
-class Converter {
+class Converter
+{
     private $inputFile;
     private $db;
 
-    public function __construct($inputFile, $outputPath) {
+    public function __construct($inputFile, $outputPath)
+    {
         $this->inputFile = $inputFile;
         $this->db = new \SQLite3($outputPath . '/' . pathinfo($inputFile, PATHINFO_FILENAME) . '.sqlite');
-
-        $this->convert();
     }
 
-    private function convert() {
+    public function convert()
+    {
         $options = new Options();
         $options->SHOULD_PRESERVE_EMPTY_ROWS = true;
         $reader = new Reader($options);
