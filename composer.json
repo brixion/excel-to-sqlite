@@ -8,5 +8,15 @@
     },
     "require": {
         "openspout/openspout": "^4.30"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.1",
+        "friendsofphp/php-cs-fixer": "^3.75"
+    },
+    "scripts": {
+        "csf": "php-cs-fixer fix",
+        "csf-diff": "php-cs-fixer check --verbose --diff",
+        "stan": "vendor/bin/phpstan analyse --memory-limit 4G",
+        "stan-clear": "vendor/bin/phpstan clear-result-cache"
     }
 }
