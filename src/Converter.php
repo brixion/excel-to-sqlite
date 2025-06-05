@@ -49,7 +49,7 @@ class Converter
      *
      * @throws \InvalidArgumentException if the input file does not exist, or if the input extension is unsupported
      */
-    public function changeInputFile(string $inputFile, string $inputExtension): void
+    public function changeInputFile(string $inputFile, ?string $inputExtension = null): void
     {
         if (!file_exists($inputFile)) {
             throw new \InvalidArgumentException('Input file does not exist: '.$inputFile);
@@ -126,12 +126,12 @@ class Converter
             throw new \Exception('Could not open file: '.$this->inputFile);
         }
 
-        $bom = fread($this->fileHandle, 4);
-        rewind($this->fileHandle);
+        $bom = fread($file, 4);
+        rewind($file);
 
         // Handle UTF-16 BOM and convert to UTF-8
         if ("\xFF\xFE" === substr($bom, 0, 2) || "\xFE\xFF" === substr($bom, 0, 2)) {
-            stream_filter_append($this->fileHandle, 'convert.iconv.UTF-16/UTF-8//IGNORE');
+            stream_filter_append($file, 'convert.iconv.UTF-16/UTF-8//IGNORE');
         }
 
         $firstLine = fgets($file);
