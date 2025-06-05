@@ -181,7 +181,7 @@ class Converter
             $tableName = pathinfo($this->inputFile, \PATHINFO_FILENAME).'_'.$sheet->getName();
             foreach ($sheet->getRowIterator() as $currentRow => $row) {
                 if (1 === $currentRow) {
-                    $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', array_map(fn ($cell) => $cell->getValue(), $row->getCells())).')');
+                    $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', array_map(fn ($cell) => $this->convertToString($cell->getValue()), $row->getCells())).')');
                 } else {
                     $values = array_map(fn ($cell) => $cell->getValue(), $row->getCells());
                     $placeholders = implode(', ', array_fill(0, \count($values), '?'));
