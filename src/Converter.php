@@ -11,20 +11,22 @@ class Converter
     private string $inputFile;
     private string $inputExtension;
 
+    private ?string $tablePrefix = null;
+
     /** @var string[] */
     private array $acceptedExtensions = ['xlsx', 'xls'];
 
     /**
      * Converter constructor.
      *
-     * @param string      $inputFile      the path to the input Excel file
      * @param string      $outputPath     the path to the output directory where the SQLite database will be created
+     * @param string|null $inputFile      the path to the input Excel file
      * @param bool        $destroyDb      optional, if true, it will destroy the database in the destruct function; default is false
      * @param string|null $inputExtension optional, the file extension of the input file; if null, it will be determined from the file name
      *
      * @throws \InvalidArgumentException if the input file does not exist, or if the output path is not a writable directory, or if the input extension is unsupported
      */
-    public function __construct(string $inputFile, string $outputPath, bool $destroyDb = false, ?string $inputExtension = null)
+    public function __construct(string $outputPath, ?string $inputFile = null, bool $destroyDb = false, ?string $inputExtension = null)
     {
         if (!is_dir($outputPath) || !is_writable($outputPath)) {
             throw new \InvalidArgumentException('Output path is not a writable directory: '.$outputPath);
@@ -32,7 +34,10 @@ class Converter
 
         $dbFile = $outputPath.'/'.pathinfo($inputFile, \PATHINFO_FILENAME).'.sqlite';
 
-        $this->changeInputFile($inputFile, $inputExtension);
+        if (null !== $inputFile) {
+            $this->changeInputFile($inputFile, $inputExtension);
+        }
+
         $this->db = new \SQLite3($dbFile);
 
         if ($destroyDb) {
@@ -49,10 +54,18 @@ class Converter
      *
      * @throws \InvalidArgumentException if the input file does not exist, or if the input extension is unsupported
      */
-    public function changeInputFile(string $inputFile, ?string $inputExtension = null): void
+    public function changeInputFile(string $inputFile, ?string $inputExtension = null, ?string $tablePrefix = null): void
     {
         if (!file_exists($inputFile)) {
             throw new \InvalidArgumentException('Input file does not exist: '.$inputFile);
+        }
+
+        if (!is_readable($inputFile)) {
+            throw new \InvalidArgumentException('Input file is not readable: '.$inputFile);
+        }
+
+        if (null !== $tablePrefix) {
+            $this->tablePrefix = $tablePrefix;
         }
 
         if (null === $inputExtension) {
@@ -142,7 +155,7 @@ class Converter
         }
         rewind($file);
 
-        $tableName = pathinfo($this->inputFile, \PATHINFO_FILENAME);
+        $tableName = $this->tablePrefix . pathinfo($this->inputFile, \PATHINFO_FILENAME);
         // first line is the header
         $header = fgetcsv($file, 8192, $delimiter);
         if (false === $header) {
@@ -178,7 +191,7 @@ class Converter
         $reader->open($this->inputFile);
 
         foreach ($reader->getSheetIterator() as $sheet) {
-            $tableName = pathinfo($this->inputFile, \PATHINFO_FILENAME).'_'.$sheet->getName();
+            $tableName = $this->tablePrefix . pathinfo($this->inputFile, \PATHINFO_FILENAME).'_'.$sheet->getName();
             foreach ($sheet->getRowIterator() as $currentRow => $row) {
                 if (1 === $currentRow) {
                     $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', array_map(fn ($cell) => $this->convertToString($cell->getValue()), $row->getCells())).')');
