@@ -2,6 +2,7 @@
 
 namespace Brixion\ExcelToSqlite;
 
+use OpenSpout\Common\Entity\Cell;
 use OpenSpout\Reader\XLSX\Options;
 use OpenSpout\Reader\XLSX\Reader;
 
@@ -11,37 +12,41 @@ class Converter
     private string $inputFile;
     private string $inputExtension;
 
+    private int $keyRow = 1;
+
     private ?string $tablePrefix = null;
 
     /** @var string[] */
-    private array $acceptedExtensions = ['xlsx', 'xls'];
+    private array $acceptedExtensions = ['txt', 'csv', 'xlsx', 'xls'];
 
     /**
      * Converter constructor.
      *
-     * @param string      $outputPath     the path to the output directory where the SQLite database will be created
+     * @param string      $outputFile     the path to the output file where the SQLite database will be created
      * @param string|null $inputFile      the path to the input Excel file
      * @param bool        $destroyDb      optional, if true, it will destroy the database in the destruct function; default is false
      * @param string|null $inputExtension optional, the file extension of the input file; if null, it will be determined from the file name
      *
      * @throws \InvalidArgumentException if the input file does not exist, or if the output path is not a writable directory, or if the input extension is unsupported
      */
-    public function __construct(string $outputPath, ?string $inputFile = null, bool $destroyDb = false, ?string $inputExtension = null)
-    {
-        if (!is_dir($outputPath) || !is_writable($outputPath)) {
-            throw new \InvalidArgumentException('Output path is not a writable directory: '.$outputPath);
+    public function __construct(
+        string $outputFile,
+        bool $destroyDb = false,
+        ?string $inputFile = null,
+        ?string $inputExtension = null,
+    ) {
+        if (!is_writable(\dirname($outputFile))) {
+            throw new \InvalidArgumentException('Output path is not a writable directory: '.$outputFile);
         }
-
-        $dbFile = $outputPath.'/'.pathinfo($inputFile, \PATHINFO_FILENAME).'.sqlite';
 
         if (null !== $inputFile) {
             $this->changeInputFile($inputFile, $inputExtension);
         }
 
-        $this->db = new \SQLite3($dbFile);
+        $this->db = new \SQLite3($outputFile);
 
         if ($destroyDb) {
-            register_shutdown_function(static fn () => @unlink($dbFile));
+            register_shutdown_function(static fn () => @unlink($outputFile));
         }
     }
 
@@ -54,7 +59,7 @@ class Converter
      *
      * @throws \InvalidArgumentException if the input file does not exist, or if the input extension is unsupported
      */
-    public function changeInputFile(string $inputFile, ?string $inputExtension = null, ?string $tablePrefix = null): void
+    public function changeInputFile(string $inputFile, ?string $inputExtension = null, ?string $tablePrefix = null, ?int $keyRow = null): void
     {
         if (!file_exists($inputFile)) {
             throw new \InvalidArgumentException('Input file does not exist: '.$inputFile);
@@ -67,6 +72,8 @@ class Converter
         if (null !== $tablePrefix) {
             $this->tablePrefix = $tablePrefix;
         }
+
+        $this->keyRow = null !== $keyRow ? $keyRow : 1;
 
         if (null === $inputExtension) {
             $inputExtension = pathinfo($inputFile, \PATHINFO_EXTENSION);
@@ -147,6 +154,7 @@ class Converter
             stream_filter_append($file, 'convert.iconv.UTF-16/UTF-8//IGNORE');
         }
 
+        // Does not work with different keyRow, needs to be fixed if ever needed
         $firstLine = fgets($file);
         if (false !== $firstLine) {
             $delimiter = $this->detectDelimiter($firstLine);
@@ -155,7 +163,7 @@ class Converter
         }
         rewind($file);
 
-        $tableName = $this->tablePrefix . pathinfo($this->inputFile, \PATHINFO_FILENAME);
+        $tableName = $this->tablePrefix.pathinfo($this->inputFile, \PATHINFO_FILENAME);
         // first line is the header
         $header = fgetcsv($file, 8192, $delimiter);
         if (false === $header) {
@@ -189,21 +197,31 @@ class Converter
         $options->SHOULD_PRESERVE_EMPTY_ROWS = true;
         $reader = new Reader($options);
         $reader->open($this->inputFile);
+        $keys = [];
 
         foreach ($reader->getSheetIterator() as $sheet) {
-            $tableName = $this->tablePrefix . pathinfo($this->inputFile, \PATHINFO_FILENAME).'_'.$sheet->getName();
+            $tableName = $this->getTableName($sheet->getName());
             foreach ($sheet->getRowIterator() as $currentRow => $row) {
-                if (1 === $currentRow) {
-                    $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', array_map(fn ($cell) => $this->convertToString($cell->getValue()), $row->getCells())).')');
-                } else {
-                    $values = array_map(fn ($cell) => $cell->getValue(), $row->getCells());
-                    $placeholders = implode(', ', array_fill(0, \count($values), '?'));
-                    $stmt = $this->db->prepare('INSERT INTO '.$tableName.' VALUES (NULL, '.$placeholders.')');
-                    foreach ($values as $index => $value) {
-                        $stmt->bindValue($index + 1, $this->convertToString($value), \SQLITE3_TEXT);
-                    }
-                    $stmt->execute();
+                if ($this->keyRow === $currentRow) {
+                    $keys = $this->getCellsFromRow($row->getCells());
+                    $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', $keys).')');
                 }
+                if ($this->keyRow >= $currentRow) {
+                    continue;
+                }
+                $values = $this->makeRowsEqualToKeys(
+                    array_map(
+                        fn ($cell) => '' === str_replace(' ', '', $cell->getValue()) ? null : $cell->getValue(),
+                        $row->getCells()
+                    ),
+                    $keys
+                );
+                $placeholders = implode(', ', array_fill(0, \count($values), '?'));
+                $stmt = $this->db->prepare('INSERT INTO '.$tableName.' VALUES (NULL, '.$placeholders.')');
+                foreach ($values as $index => $value) {
+                    $stmt->bindValue($index + 1, $this->convertToString($value), \SQLITE3_TEXT);
+                }
+                $stmt->execute();
             }
         }
 
@@ -253,5 +271,81 @@ class Converter
         }
 
         return (string) $value;
+    }
+
+    /**
+     * Generates a sanitized table name based on the sheet name.
+     *
+     * This method replaces any unwanted characters in the sheet name with underscores and prefixes it with the table prefix.
+     *
+     * @param string $sheetName the name of the sheet
+     *
+     * @return string the sanitized table name
+     */
+    private function getTableName(string $sheetName): string
+    {
+        return $this->tablePrefix.'_'.preg_replace('/[^a-zA-Z0-9_]/', '_', $sheetName);
+    }
+
+    /**
+     * Strips unwanted characters from a string and replaces them with underscores.
+     *
+     * This method is used to sanitize strings, especially for table names and column names.
+     *
+     * @param string $string the string to sanitize
+     *
+     * @return string the sanitized string
+     */
+    private function getStrippedString(string $string): string
+    {
+        return preg_replace('/[^a-zA-Z0-9_]/', '_', $string);
+    }
+
+    /**
+     * Extracts the cells from a row and converts them to strings.
+     *
+     * This method maps each cell in the row to a string, stripping unwanted characters and filtering out empty values.
+     *
+     * @param array<Cell> $row the row containing cells
+     *
+     * @return array<string> the processed cells as strings
+     */
+    private function getCellsFromRow(array $row): array
+    {
+        if (empty($row)) {
+            return [];
+        }
+        $cells = array_map(
+            fn (Cell $cell) => $this->getStrippedString($this->convertToString($cell->getValue())),
+            $row
+        );
+
+        $cells = array_filter($cells, fn ($cell) => !empty($cell) && '_' !== $cell && '' !== trim($cell));
+
+        return $cells;
+    }
+
+    /**
+     * Makes the row equal to the keys by padding or slicing it.
+     *
+     * If the row has fewer elements than the keys, it pads the row with null values.
+     * If the row has more elements than the keys, it slices the row to match the number of keys.
+     *
+     * @param array<string> $row  the row to modify
+     * @param array<string> $keys the keys to match
+     *
+     * @return array<string> the modified row
+     */
+    private function makeRowsEqualToKeys(array $row, array $keys): array
+    {
+        if (\count($row) !== \count($keys)) {
+            if (\count($row) < \count($keys)) {
+                $row = array_pad($row, \count($keys), null);
+            } else {
+                $row = \array_slice($row, 0, \count($keys));
+            }
+        }
+
+        return $row;
     }
 }
