@@ -204,20 +204,17 @@ class Converter
             foreach ($sheet->getRowIterator() as $currentRow => $row) {
                 if ($this->keyRow === $currentRow) {
                     $keys = $this->getCellsFromRow($row->getCells());
-                    $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', $keys).')');
+                    $this->db->exec('CREATE TABLE IF NOT EXISTS `'.$tableName.'` (id INTEGER PRIMARY KEY, '.implode(', ', $keys).')');
                 }
                 if ($this->keyRow >= $currentRow) {
                     continue;
                 }
                 $values = $this->makeRowsEqualToKeys(
-                    array_map(
-                        fn ($cell) => '' === str_replace(' ', '', $cell->getValue()) ? null : $cell->getValue(),
-                        $row->getCells()
-                    ),
+                    array_map(fn ($cell) => $cell->getValue(), $row->getCells()),
                     $keys
                 );
                 $placeholders = implode(', ', array_fill(0, \count($values), '?'));
-                $stmt = $this->db->prepare('INSERT INTO '.$tableName.' VALUES (NULL, '.$placeholders.')');
+                $stmt = $this->db->prepare('INSERT INTO `'.$tableName.'` VALUES (NULL, '.$placeholders.')');
                 foreach ($values as $index => $value) {
                     $stmt->bindValue($index + 1, $this->convertToString($value), \SQLITE3_TEXT);
                 }
