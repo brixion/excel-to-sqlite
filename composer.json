@@ -1,5 +1,14 @@
 {
     "name": "brixion/excel-to-sqlite",
+    "description": "A library to convert Excel files to SQLite databases.",
+    "keywords": [
+        "excel",
+        "sqlite",
+        "database",
+        "conversion"
+    ],
+    "version": "1.0.0",
+    "license": "MIT",
     "type": "library",
     "autoload": {
         "psr-4": {
