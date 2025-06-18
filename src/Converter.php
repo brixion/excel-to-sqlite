@@ -17,7 +17,7 @@ class Converter
     private ?string $tablePrefix = null;
 
     /** @var string[] */
-    private array $acceptedExtensions = ['txt', 'csv', 'xlsx', 'xls'];
+    private array $acceptedExtensions = ['txt', 'csv', 'xlsx', 'xls', 'xaf'];
 
     /**
      * Converter constructor.
@@ -118,6 +118,9 @@ class Converter
                 case 'xlsx':
                 case 'xls':
                     $this->convertExcel();
+                    break;
+                case 'xaf':
+                    $this->convertXaf();
                     break;
                 default:
                     throw new \InvalidArgumentException('Unsupported file extension: '.$this->inputExtension);
@@ -223,6 +226,314 @@ class Converter
         }
 
         $reader->close();
+    }
+
+    /**
+     * Converts the input XAF file to an SQLite database.
+     *
+     * This method reads XAF 3.x and 4.x files, parses the XML structure,
+     * and creates tables based on the XAF data objects.
+     *
+     * @throws \Exception if there is an error during reading or writing to the database
+     */
+    private function convertXaf(): void
+    {
+        $xmlContent = file_get_contents($this->inputFile);
+        if (false === $xmlContent) {
+            throw new \Exception('Could not read XAF file: '.$this->inputFile);
+        }
+
+        // Load XML content
+        $xml = new \DOMDocument();
+        libxml_use_internal_errors(true);
+        if (!$xml->loadXML($xmlContent)) {
+            $errors = libxml_get_errors();
+            $errorMessage = 'Failed to parse XAF XML: ';
+            foreach ($errors as $error) {
+                $errorMessage .= $error->message.' ';
+            }
+            throw new \Exception($errorMessage);
+        }
+        $xpath = new \DOMXPath($xml);
+
+        // Register namespace for XAF files
+        $xpath->registerNamespace('xaf', 'http://www.auditfiles.nl/XAF/3.1');
+
+        $companies = $xpath->query('//xaf:company');
+
+        if (0 === $companies->length) {
+            throw new \Exception('No company elements found in XAF file');
+        }
+
+        // Process each company
+        foreach ($companies as $company) {
+            if (!$company instanceof \DOMElement) {
+                continue;
+            }
+            // Process plural elements that contain multiple child elements within company
+            $this->processXafPluralElements($xpath, $company);
+
+            // Process transactions with special handling for trLine elements within company
+            $this->processXafTransactions($xpath, $company);
+        }
+    }
+
+    /**
+     * Processes plural elements in XAF files and creates tables for them.
+     *
+     * @param \DOMXPath   $xpath   the XPath object for querying the XML
+     * @param \DOMElement $company the company element to process within
+     */
+    private function processXafPluralElements(\DOMXPath $xpath, \DOMElement $company): void
+    {
+        // Find all elements within the company that contain multiple child elements (plural containers).
+        // Try both with and without namespace
+        $pluralContainers = $xpath->query('./*[count(*) > 1 and local-name(*[1]) = local-name(*[2])]', $company);
+
+        foreach ($pluralContainers as $container) {
+            if (!$container instanceof \DOMElement) {
+                continue;
+            }
+            $containerName = $container->nodeName;
+
+            // Skip if this is a transaction container (handled separately)
+            if (\in_array($containerName, ['transactions', 'journal'])) {
+                continue;
+            }
+
+            $tableName = $this->getTableName($containerName);
+            $columns = [];
+            if (null !== $container->firstElementChild) {
+                $columns = $this->extractXmlElementColumns($container->firstElementChild);
+            }
+
+            // Create table
+            $this->createXafTable($tableName, $columns);
+
+            // Insert data for each child element
+            foreach ($container->childNodes as $childElement) {
+                if ($childElement instanceof \DOMElement) {
+                    $this->insertXafData($tableName, $childElement, $columns);
+                }
+            }
+        }
+    }
+
+    /**
+     * Processes transactions in XAF files with special handling for trLine elements.
+     *
+     * @param \DOMXPath   $xpath   the XPath object for querying the XML
+     * @param \DOMElement $company the company element to process within
+     */
+    private function processXafTransactions(\DOMXPath $xpath, \DOMElement $company): void
+    {
+        // Try both with and without namespace
+        $transactions = $xpath->query('.//xaf:transaction', $company);
+
+        if (0 === $transactions->length) {
+            return;
+        }
+
+        // Create transactions table
+        $transactionColumns = [];
+        $firstTransaction = $transactions->item(0);
+        if ($firstTransaction instanceof \DOMElement) {
+            $transactionColumns = $this->extractXmlElementColumns($firstTransaction, ['trLine']);
+        }
+        $transactionTableName = $this->getTableName('transactions');
+        $this->createXafTable($transactionTableName, $transactionColumns);
+
+        // Create trLine table with foreign key reference
+        $trLineColumns = ['transaction_id' => 'INTEGER'];
+        $trLineElements = $xpath->query('.//xaf:trLine', $company);
+        if (0 === $trLineElements->length) {
+            $trLineElements = $xpath->query('.//trLine', $company);
+        }
+        if ($trLineElements->length > 0) {
+            $firstTrLine = $trLineElements->item(0);
+            if ($firstTrLine instanceof \DOMElement) {
+                $trLineColumns = array_merge($trLineColumns, $this->extractXmlElementColumns($firstTrLine));
+            }
+        }
+        $trLineTableName = $this->getTableName('trLines');
+        $this->createXafTable($trLineTableName, $trLineColumns);
+
+        // Insert transaction data
+        foreach ($transactions as $transactionId => $transaction) {
+            if (!$transaction instanceof \DOMElement) {
+                continue;
+            }
+            $transactionData = $this->extractXmlElementData($transaction, ['trLine']);
+            $this->insertXafDataWithId(
+                $transactionTableName,
+                $transactionData,
+                $transactionColumns,
+                $transactionId + 1
+            );
+
+            // Insert trLine data with foreign key reference
+            $trLines = $xpath->query('.//xaf:trLine', $transaction);
+            if (0 === $trLines->length) {
+                $trLines = $xpath->query('.//trLine', $transaction);
+            }
+            foreach ($trLines as $trLine) {
+                if (!$trLine instanceof \DOMElement) {
+                    continue;
+                }
+                $trLineData = $this->extractXmlElementData($trLine);
+                $trLineData['transaction_id'] = $transactionId + 1;
+                $this->insertXafDataWithValues($trLineTableName, $trLineData, $trLineColumns);
+            }
+        }
+    }
+
+    /**
+     * Extracts column names from an XML element.
+     *
+     * @param \DOMElement   $element         the XML element
+     * @param array<string> $excludeElements elements to exclude from extraction
+     *
+     * @return array<string, string> the column names and types
+     */
+    private function extractXmlElementColumns(\DOMElement $element, array $excludeElements = []): array
+    {
+        $columns = [];
+
+        foreach ($element->childNodes as $child) {
+            if (\XML_ELEMENT_NODE === $child->nodeType && !\in_array($child->nodeName, $excludeElements)) {
+                if ($child->hasChildNodes() && \XML_ELEMENT_NODE === $child->firstChild->nodeType) {
+                    // Nested element - flatten it
+                    foreach ($child->childNodes as $nestedChild) {
+                        if (\XML_ELEMENT_NODE === $nestedChild->nodeType) {
+                            $columns[$child->nodeName.'_'.$nestedChild->nodeName] = 'TEXT';
+                        }
+                    }
+                } else {
+                    $columns[$child->nodeName] = 'TEXT';
+                }
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Extracts data from an XML element.
+     *
+     * @param \DOMElement   $element         the XML element
+     * @param array<string> $excludeElements elements to exclude from extraction
+     *
+     * @return array<string, string> the extracted data
+     */
+    private function extractXmlElementData(\DOMElement $element, array $excludeElements = []): array
+    {
+        $data = [];
+
+        foreach ($element->childNodes as $child) {
+            if (\XML_ELEMENT_NODE === $child->nodeType && !\in_array($child->nodeName, $excludeElements)) {
+                if ($child->hasChildNodes() && \XML_ELEMENT_NODE === $child->firstChild->nodeType) {
+                    // Nested element - flatten it
+                    foreach ($child->childNodes as $nestedChild) {
+                        if (\XML_ELEMENT_NODE === $nestedChild->nodeType) {
+                            $data[$child->nodeName.'_'.$nestedChild->nodeName] = trim($nestedChild->textContent);
+                        }
+                    }
+                } else {
+                    $data[$child->nodeName] = trim($child->textContent);
+                }
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Creates a table for XAF data.
+     *
+     * @param string                $tableName the name of the table
+     * @param array<string, string> $columns   the columns and their types
+     */
+    private function createXafTable(string $tableName, array $columns): void
+    {
+        $columnDefinitions = ['id INTEGER PRIMARY KEY'];
+
+        foreach ($columns as $columnName => $columnType) {
+            $sanitizedColumnName = $this->getStrippedString($columnName);
+            $columnDefinitions[] = "`{$sanitizedColumnName}` {$columnType}";
+        }
+
+        $sql = "CREATE TABLE IF NOT EXISTS `{$tableName}` (".implode(', ', $columnDefinitions).')';
+        $this->db->exec($sql);
+    }
+
+    /**
+     * Inserts XAF data into a table.
+     *
+     * @param string                $tableName the name of the table
+     * @param \DOMElement           $element   the XML element containing the data
+     * @param array<string, string> $columns   the table columns
+     */
+    private function insertXafData(string $tableName, \DOMElement $element, array $columns): void
+    {
+        $data = $this->extractXmlElementData($element);
+        $this->insertXafDataWithValues($tableName, $data, $columns);
+    }
+
+    /**
+     * Inserts XAF data into a table with a specific ID.
+     *
+     * @param string                $tableName the name of the table
+     * @param array<string, mixed>  $data      the data to insert
+     * @param array<string, string> $columns   the table columns
+     * @param int                   $id        the ID to use
+     */
+    private function insertXafDataWithId(string $tableName, array $data, array $columns, int $id): void
+    {
+        $columnNames = ['id'];
+        $values = [$id];
+
+        foreach ($columns as $columnName => $columnType) {
+            $sanitizedColumnName = $this->getStrippedString($columnName);
+            $columnNames[] = "`{$sanitizedColumnName}`";
+            $values[] = $data[$columnName] ?? null;
+        }
+
+        $placeholders = implode(', ', array_fill(0, \count($values), '?'));
+        $sql = "INSERT INTO `{$tableName}` (".implode(', ', $columnNames).") VALUES ({$placeholders})";
+
+        $stmt = $this->db->prepare($sql);
+        foreach ($values as $index => $value) {
+            $stmt->bindValue($index + 1, $this->convertToString($value), \SQLITE3_TEXT);
+        }
+        $stmt->execute();
+    }
+
+    /**
+     * Inserts XAF data into a table with auto-generated ID.
+     *
+     * @param string                $tableName the name of the table
+     * @param array<string, mixed>  $data      the data to insert
+     * @param array<string, string> $columns   the table columns
+     */
+    private function insertXafDataWithValues(string $tableName, array $data, array $columns): void
+    {
+        $columnNames = [];
+        $values = [];
+
+        foreach ($columns as $columnName => $columnType) {
+            $sanitizedColumnName = $this->getStrippedString($columnName);
+            $columnNames[] = "`{$sanitizedColumnName}`";
+            $values[] = $data[$columnName] ?? null;
+        }
+
+        $placeholders = implode(', ', array_fill(0, \count($values), '?'));
+        $sql = "INSERT INTO `{$tableName}` (".implode(', ', $columnNames).") VALUES ({$placeholders})";
+
+        $stmt = $this->db->prepare($sql);
+        foreach ($values as $index => $value) {
+            $stmt->bindValue($index + 1, $this->convertToString($value), \SQLITE3_TEXT);
+        }
+        $stmt->execute();
     }
 
     /**
