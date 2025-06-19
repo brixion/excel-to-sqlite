@@ -595,7 +595,8 @@ class Converter
         if (null === $sheetName || '' === $sheetName) {
             return $this->tablePrefix;
         }
-        return $this->tablePrefix . '_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $sheetName);
+
+        return $this->tablePrefix.'_'.preg_replace('/[^a-zA-Z0-9_]/', '_', $sheetName);
     }
 
     /**
