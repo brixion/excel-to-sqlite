@@ -166,7 +166,7 @@ class Converter
         }
         rewind($file);
 
-        $tableName = $this->tablePrefix.pathinfo($this->inputFile, \PATHINFO_FILENAME);
+        $tableName = $this->getTableName();
         // first line is the header
         $header = fgetcsv($file, 8192, $delimiter);
         if (false === $header) {
@@ -586,13 +586,16 @@ class Converter
      *
      * This method replaces any unwanted characters in the sheet name with underscores and prefixes it with the table prefix.
      *
-     * @param string $sheetName the name of the sheet
+     * @param ?string $sheetName the name of the sheet
      *
      * @return string the sanitized table name
      */
-    private function getTableName(string $sheetName): string
+    private function getTableName(?string $sheetName = null): string
     {
-        return $this->tablePrefix.'_'.preg_replace('/[^a-zA-Z0-9_]/', '_', $sheetName);
+        if (null === $sheetName || '' === $sheetName) {
+            return $this->tablePrefix;
+        }
+        return $this->tablePrefix . '_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $sheetName);
     }
 
     /**
