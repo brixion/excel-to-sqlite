@@ -173,9 +173,9 @@ class Converter
             throw new \RuntimeException('Failed to read header line of file');
         }
 
-        $this->db->exec('CREATE TABLE IF NOT EXISTS '.$tableName.' (id INTEGER PRIMARY KEY, '.implode(', ', array_map(fn ($col) => $col.' TEXT', $header)).')');
+        $this->db->exec('CREATE TABLE IF NOT EXISTS `'.$tableName.'` (id INTEGER PRIMARY KEY, '.implode(', ', array_map(fn ($col) => $col.' TEXT', $header)).')');
 
-        $stmt = $this->db->prepare('INSERT INTO '.$tableName.' ('.implode(', ', $header).') VALUES ('.implode(', ', array_fill(0, \count($header), '?')).')');
+        $stmt = $this->db->prepare('INSERT INTO `'.$tableName.'` ('.implode(', ', $header).') VALUES ('.implode(', ', array_fill(0, \count($header), '?')).')');
         while (($row = fgetcsv($file, 8192, $delimiter)) !== false) {
             foreach ($row as $index => $value) {
                 $stmt->bindValue($index + 1, $this->convertToString($value), \SQLITE3_TEXT);
